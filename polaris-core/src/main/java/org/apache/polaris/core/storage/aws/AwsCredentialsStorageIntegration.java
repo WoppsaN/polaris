@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.apache.polaris.core.config.FeatureConfiguration;
@@ -47,8 +48,10 @@ import org.apache.polaris.core.storage.StorageAccessProperty;
 import org.apache.polaris.core.storage.StorageUri;
 import org.apache.polaris.core.storage.StorageUtil;
 import org.apache.polaris.core.storage.aws.StsClientProvider.StsDestination;
+import org.apache.polaris.core.storage.cache.StorageCredentialCache;
 import org.apache.polaris.core.storage.cache.StorageCredentialCacheKey;
 import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
@@ -59,7 +62,8 @@ import software.amazon.awssdk.policybuilder.iam.IamResource;
 import software.amazon.awssdk.policybuilder.iam.IamStatement;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
-import software.amazon.awssdk.services.sts.model.AssumeRoleResponse;
+import software.amazon.awssdk.services.sts.model.AssumeRoleWithWebIdentityRequest;
+import software.amazon.awssdk.services.sts.model.Credentials;
 import software.amazon.awssdk.services.sts.model.Tag;
 
 /** Credential vendor that supports generating AWS STS subscoped credentials. */
@@ -68,6 +72,7 @@ public class AwsCredentialsStorageIntegration
   private final StsClientProvider stsClientProvider;
   private final Function<AwsStorageConfigurationInfo, Optional<AwsCredentialsProvider>>
       credentialsResolver;
+  @Nullable private final Supplier<String> webIdentityToken;
 
   private static final Logger LOGGER =
       LoggerFactory.getLogger(AwsCredentialsStorageIntegration.class);
@@ -106,6 +111,20 @@ public class AwsCredentialsStorageIntegration
     super(cache, realmConfig, storageConfig);
     this.stsClientProvider = stsClientProvider;
     this.credentialsResolver = credentialsResolver;
+    this.webIdentityToken = null;
+  }
+
+  /** Constructor for STS AssumeRoleWithWebIdentity with the server's own token. */
+  public AwsCredentialsStorageIntegration(
+      StsClientProvider stsClientProvider,
+      Supplier<String> webIdentityToken,
+      @Nullable StorageCredentialCache cache,
+      AwsStorageConfigurationInfo storageConfig,
+      RealmConfig realmConfig) {
+    super(cache, realmConfig, storageConfig);
+    this.stsClientProvider = stsClientProvider;
+    this.credentialsResolver = config -> Optional.empty();
+    this.webIdentityToken = webIdentityToken;
   }
 
   @Override
@@ -170,7 +189,8 @@ public class AwsCredentialsStorageIntegration
         sessionTags,
         stsClientProvider,
         credentialsResolver,
-        realmConfig);
+        realmConfig,
+        webIdentityToken);
   }
 
   private static String resolveRoleSessionName(
@@ -217,34 +237,16 @@ public class AwsCredentialsStorageIntegration
         realmConfig.getConfig(STORAGE_CREDENTIAL_DURATION_SECONDS);
     String region = awsStorageConfig.getRegion();
     StorageAccessConfig.Builder accessConfig = StorageAccessConfig.builder();
-    String roleSessionName = key.roleSessionName();
 
     if (shouldUseSts(awsStorageConfig)) {
-      AssumeRoleRequest.Builder request =
-          AssumeRoleRequest.builder()
-              .externalId(awsStorageConfig.getExternalId())
-              .roleArn(awsStorageConfig.getRoleARN())
-              .roleSessionName(roleSessionName)
-              .policy(
-                  policyString(
-                          awsStorageConfig,
-                          key.allowedReadLocations(),
-                          key.allowedListLocations(),
-                          key.allowedWriteLocations(),
-                          region)
-                      .toJson())
-              .durationSeconds(storageCredentialDurationSeconds);
-
-      List<Tag> sessionTags = key.sessionTags();
-      if (!sessionTags.isEmpty()) {
-        request.tags(sessionTags);
-        // Mark all tags as transitive for role chaining support
-        request.transitiveTagKeys(sessionTags.stream().map(Tag::key).collect(Collectors.toList()));
-      }
-
-      key.credentialsResolver()
-          .apply(awsStorageConfig)
-          .ifPresent(cp -> request.overrideConfiguration(b -> b.credentialsProvider(cp)));
+      String policy =
+          policyString(
+                  awsStorageConfig,
+                  key.allowedReadLocations(),
+                  key.allowedListLocations(),
+                  key.allowedWriteLocations(),
+                  region)
+              .toJson();
 
       @SuppressWarnings("resource")
       // Note: stsClientProvider returns "thin" clients that do not need closing
@@ -252,12 +254,13 @@ public class AwsCredentialsStorageIntegration
           key.stsClientProvider()
               .stsClient(StsDestination.of(awsStorageConfig.getStsEndpointUri(), region));
 
-      AssumeRoleResponse response = stsClient.assumeRole(request.build());
-      accessConfig.put(StorageAccessProperty.AWS_KEY_ID, response.credentials().accessKeyId());
-      accessConfig.put(
-          StorageAccessProperty.AWS_SECRET_KEY, response.credentials().secretAccessKey());
-      accessConfig.put(StorageAccessProperty.AWS_TOKEN, response.credentials().sessionToken());
-      Optional.ofNullable(response.credentials().expiration())
+      Credentials credentials =
+          mintCredentials(stsClient, key, policy, storageCredentialDurationSeconds);
+
+      accessConfig.put(StorageAccessProperty.AWS_KEY_ID, credentials.accessKeyId());
+      accessConfig.put(StorageAccessProperty.AWS_SECRET_KEY, credentials.secretAccessKey());
+      accessConfig.put(StorageAccessProperty.AWS_TOKEN, credentials.sessionToken());
+      Optional.ofNullable(credentials.expiration())
           .ifPresent(i ->
               accessConfig.put(
                   StorageAccessProperty.AWS_SESSION_TOKEN_EXPIRES_AT_MS,
@@ -290,6 +293,60 @@ public class AwsCredentialsStorageIntegration
     }
 
     return accessConfig.build();
+  }
+
+  /**
+   * Gets temporary credentials from STS. The STS call depends on the mechanism that built this
+   * integration, either AssumeRole or AssumeRoleWithWebIdentity.
+   */
+  private static Credentials mintCredentials(
+      StsClient stsClient, AwsStorageCredentialCacheKey key, String policy, int durationSeconds) {
+    return key.webIdentityToken().isPresent()
+        ? assumeRoleWithWebIdentity(stsClient, key, policy, durationSeconds)
+        : assumeRole(stsClient, key, policy, durationSeconds);
+  }
+
+  private static Credentials assumeRole(
+      StsClient stsClient, AwsStorageCredentialCacheKey key, String policy, int durationSeconds) {
+    AwsStorageConfigurationInfo awsStorageConfig = key.storageConfig();
+    AssumeRoleRequest.Builder request =
+        AssumeRoleRequest.builder()
+            .externalId(awsStorageConfig.getExternalId())
+            .roleArn(awsStorageConfig.getRoleARN())
+            .roleSessionName(key.roleSessionName())
+            .policy(policy)
+            .durationSeconds(durationSeconds);
+
+    List<Tag> sessionTags = key.sessionTags();
+    if (!sessionTags.isEmpty()) {
+      request.tags(sessionTags);
+      // Mark all tags as transitive for role chaining support
+      request.transitiveTagKeys(sessionTags.stream().map(Tag::key).collect(Collectors.toList()));
+    }
+
+    key.credentialsResolver()
+        .apply(awsStorageConfig)
+        .ifPresent(cp -> request.overrideConfiguration(b -> b.credentialsProvider(cp)));
+
+    return stsClient.assumeRole(request.build()).credentials();
+  }
+
+  private static Credentials assumeRoleWithWebIdentity(
+      StsClient stsClient, AwsStorageCredentialCacheKey key, String policy, int durationSeconds) {
+    if (!key.sessionTags().isEmpty()) {
+      LOGGER.warn(
+          "Session tags are not supported with STS AssumeRoleWithWebIdentity and are not sent");
+    }
+    AssumeRoleWithWebIdentityRequest request =
+        AssumeRoleWithWebIdentityRequest.builder()
+            .roleArn(key.storageConfig().getRoleARN())
+            .roleSessionName(key.roleSessionName())
+            .policy(policy)
+            .durationSeconds(durationSeconds)
+            .webIdentityToken(key.webIdentityToken().orElseThrow().get())
+            .build();
+
+    return stsClient.assumeRoleWithWebIdentity(request).credentials();
   }
 
   private static boolean shouldUseSts(AwsStorageConfigurationInfo storageConfig) {

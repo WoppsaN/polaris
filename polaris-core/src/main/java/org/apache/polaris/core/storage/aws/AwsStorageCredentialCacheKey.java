@@ -22,11 +22,13 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import org.apache.polaris.core.config.RealmConfig;
 import org.apache.polaris.core.storage.StorageAccessConfig;
 import org.apache.polaris.core.storage.cache.StorageCredentialCacheKey;
 import org.apache.polaris.immutables.PolarisImmutable;
 import org.immutables.value.Value;
+import org.jspecify.annotations.Nullable;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.services.sts.model.Tag;
 
@@ -75,6 +77,10 @@ public interface AwsStorageCredentialCacheKey extends StorageCredentialCacheKey 
   @Value.Auxiliary
   RealmConfig realmConfig();
 
+  @Value.Parameter(order = 11)
+  @Value.Auxiliary
+  Optional<Supplier<String>> webIdentityToken();
+
   @Override
   default StorageAccessConfig load() {
     return AwsCredentialsStorageIntegration.compute(this);
@@ -90,7 +96,8 @@ public interface AwsStorageCredentialCacheKey extends StorageCredentialCacheKey 
       List<Tag> sessionTags,
       StsClientProvider stsClientProvider,
       Function<AwsStorageConfigurationInfo, Optional<AwsCredentialsProvider>> credentialsResolver,
-      RealmConfig realmConfig) {
+      RealmConfig realmConfig,
+      @Nullable Supplier<String> webIdentityToken) {
     return ImmutableAwsStorageCredentialCacheKey.of(
         realmId,
         storageConfig,
@@ -101,6 +108,7 @@ public interface AwsStorageCredentialCacheKey extends StorageCredentialCacheKey 
         sessionTags,
         stsClientProvider,
         credentialsResolver,
-        realmConfig);
+        realmConfig,
+        Optional.ofNullable(webIdentityToken));
   }
 }

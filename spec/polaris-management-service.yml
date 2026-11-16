@@ -1230,12 +1230,15 @@ components:
               type: string
               examples:
                 - "STS"
+                - "STS_WEB_IDENTITY"
               description: |
                 How Polaris vends subscoped storage credentials for this catalog. Leave the field empty
                 to use the server's default mechanism, which is STS in Apache Polaris.
 
                 Apache Polaris supports these values:
                 - `STS`: STS AssumeRole against the configured role.
+                - `STS_WEB_IDENTITY`: STS AssumeRoleWithWebIdentity against the configured role, with
+                  the server's own web identity token.
 
                 Later releases may add values. The server returns HTTP 400 for a value it does not
                 support.

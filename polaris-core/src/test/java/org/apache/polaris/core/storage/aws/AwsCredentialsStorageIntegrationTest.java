@@ -28,6 +28,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.polaris.core.auth.PolarisPrincipal;
 import org.apache.polaris.core.collection.AttributeMap;
 import org.apache.polaris.core.config.FeatureConfiguration;
@@ -59,6 +60,8 @@ import software.amazon.awssdk.policybuilder.iam.IamStatement;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
 import software.amazon.awssdk.services.sts.model.AssumeRoleResponse;
+import software.amazon.awssdk.services.sts.model.AssumeRoleWithWebIdentityRequest;
+import software.amazon.awssdk.services.sts.model.AssumeRoleWithWebIdentityResponse;
 import software.amazon.awssdk.services.sts.model.Credentials;
 import software.amazon.awssdk.services.sts.model.StsException;
 import software.amazon.awssdk.services.sts.model.Tag;
@@ -1758,7 +1761,8 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
         sessionTags,
         Mockito.mock(StsClientProvider.class),
         cfg -> Optional.empty(),
-        Mockito.mock(RealmConfig.class));
+        Mockito.mock(RealmConfig.class),
+        null);
   }
 
   @Test
@@ -1822,5 +1826,117 @@ class AwsCredentialsStorageIntegrationTest extends BaseStorageIntegrationTest {
                 Set.of()),
             Optional.empty(),
             CredentialVendingContext.empty());
+  }
+
+  // Tests for STS AssumeRoleWithWebIdentity
+
+  private static StsClient webIdentityStsClient() {
+    StsClient stsClient = Mockito.mock(StsClient.class);
+    Mockito.when(
+            stsClient.assumeRoleWithWebIdentity(
+                Mockito.any(AssumeRoleWithWebIdentityRequest.class)))
+        .thenReturn(
+            AssumeRoleWithWebIdentityResponse.builder()
+                .credentials(ASSUME_ROLE_RESPONSE.credentials())
+                .build());
+    return stsClient;
+  }
+
+  private static AssumeRoleWithWebIdentityRequest webIdentityRequest(StsClient stsClient) {
+    ArgumentCaptor<AssumeRoleWithWebIdentityRequest> captor =
+        ArgumentCaptor.forClass(AssumeRoleWithWebIdentityRequest.class);
+    Mockito.verify(stsClient).assumeRoleWithWebIdentity(captor.capture());
+    return captor.getValue();
+  }
+
+  private static AwsStorageConfigurationInfo webIdentityStorageConfig(String location) {
+    return AwsStorageConfigurationInfo.builder()
+        .addAllowedLocation(location)
+        .roleARN("arn:aws:iam::012345678901:role/jdoe")
+        .build();
+  }
+
+  @Test
+  public void testWebIdentitySendsTokenRoleSessionNameAndDuration() {
+    StsClient stsClient = webIdentityStsClient();
+    String location = s3Path("bucket", "path/to/warehouse");
+
+    StorageAccessConfig accessConfig =
+        new AwsCredentialsStorageIntegration(
+                destination -> stsClient,
+                () -> "server-token",
+                null,
+                webIdentityStorageConfig(location),
+                PRINCIPAL_INCLUDER_REALM_CONFIG)
+            .getStorageAccessConfig(
+                toGrants(Set.of(location), Set.of(location), Set.of()),
+                Optional.empty(),
+                CONTEXT_WITH_PRINCIPAL);
+
+    AssumeRoleWithWebIdentityRequest request = webIdentityRequest(stsClient);
+    assertThat(request.webIdentityToken()).isEqualTo("server-token");
+    assertThat(request.roleArn()).isEqualTo("arn:aws:iam::012345678901:role/jdoe");
+    assertThat(request.roleSessionName()).isEqualTo("polaris-test-principal");
+    assertThat(request.durationSeconds())
+        .isEqualTo(
+            PRINCIPAL_INCLUDER_REALM_CONFIG.getConfig(
+                FeatureConfiguration.STORAGE_CREDENTIAL_DURATION_SECONDS));
+
+    assertThat(request.overrideConfiguration()).isEmpty();
+    Mockito.verify(stsClient, Mockito.never()).assumeRole(Mockito.any(AssumeRoleRequest.class));
+    assertThat(accessConfig.get(StorageAccessProperty.AWS_KEY_ID)).isEqualTo("accessKey");
+    assertThat(accessConfig.get(StorageAccessProperty.AWS_SECRET_KEY)).isEqualTo("secretKey");
+    assertThat(accessConfig.get(StorageAccessProperty.AWS_TOKEN)).isEqualTo("sess");
+  }
+
+  @Test
+  public void testWebIdentityReadsTheTokenOnEveryMint() {
+    StsClient stsClient = webIdentityStsClient();
+    String location = s3Path("bucket", "path/to/warehouse");
+    AtomicInteger reads = new AtomicInteger();
+    AwsCredentialsStorageIntegration integration =
+        new AwsCredentialsStorageIntegration(
+            destination -> stsClient,
+            () -> "token-" + reads.incrementAndGet(),
+            null,
+            webIdentityStorageConfig(location),
+            EMPTY_REALM_CONFIG);
+    List<LocationGrant> grants = toGrants(Set.of(location), Set.of(), Set.of());
+
+    integration.getStorageAccessConfig(grants, Optional.empty(), CredentialVendingContext.empty());
+    integration.getStorageAccessConfig(grants, Optional.empty(), CredentialVendingContext.empty());
+
+    ArgumentCaptor<AssumeRoleWithWebIdentityRequest> captor =
+        ArgumentCaptor.forClass(AssumeRoleWithWebIdentityRequest.class);
+    Mockito.verify(stsClient, Mockito.times(2)).assumeRoleWithWebIdentity(captor.capture());
+    assertThat(captor.getAllValues())
+        .extracting(AssumeRoleWithWebIdentityRequest::webIdentityToken)
+        .containsExactly("token-1", "token-2");
+  }
+
+  @Test
+  public void testWebIdentityTokenFailureIsRaisedAndStsIsNotCalled() {
+    StsClient stsClient = webIdentityStsClient();
+    String location = s3Path("bucket", "path/to/warehouse");
+    AwsCredentialsStorageIntegration integration =
+        new AwsCredentialsStorageIntegration(
+            destination -> stsClient,
+            () -> {
+              throw new IllegalStateException("Web identity token file /token is empty");
+            },
+            null,
+            webIdentityStorageConfig(location),
+            EMPTY_REALM_CONFIG);
+
+    Assertions.assertThatThrownBy(() ->
+            integration.getStorageAccessConfig(
+                toGrants(Set.of(location), Set.of(), Set.of()),
+                Optional.empty(),
+                CredentialVendingContext.empty()))
+        .isInstanceOf(IllegalStateException.class)
+        .hasMessage("Web identity token file /token is empty");
+    Mockito.verify(stsClient, Mockito.never())
+        .assumeRoleWithWebIdentity(Mockito.any(AssumeRoleWithWebIdentityRequest.class));
+    Mockito.verify(stsClient, Mockito.never()).assumeRole(Mockito.any(AssumeRoleRequest.class));
   }
 }

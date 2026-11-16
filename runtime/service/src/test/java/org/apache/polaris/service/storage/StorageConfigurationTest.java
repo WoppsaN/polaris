@@ -29,7 +29,10 @@ import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.auth.oauth2.AccessToken;
 import com.google.auth.oauth2.DownscopedCredentials;
 import com.google.auth.oauth2.GoogleCredentials;
+import io.smallrye.config.PropertiesConfigSource;
+import io.smallrye.config.SmallRyeConfigBuilder;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -87,6 +90,11 @@ public class StorageConfigurationTest {
           @Override
           public Optional<String> secretKey() {
             return Optional.of(TEST_SECRET_KEY);
+          }
+
+          @Override
+          public Optional<Path> webIdentityTokenFile() {
+            return Optional.empty();
           }
 
           @Override
@@ -169,6 +177,11 @@ public class StorageConfigurationTest {
           }
 
           @Override
+          public Optional<Path> webIdentityTokenFile() {
+            return Optional.empty();
+          }
+
+          @Override
           public Map<String, StorageConfig> storages() {
             return Map.of();
           }
@@ -245,6 +258,11 @@ public class StorageConfigurationTest {
           @Override
           public Optional<String> secretKey() {
             return Optional.of(TEST_SECRET_KEY);
+          }
+
+          @Override
+          public Optional<Path> webIdentityTokenFile() {
+            return Optional.empty();
           }
 
           @Override
@@ -500,5 +518,21 @@ public class StorageConfigurationTest {
     assertThat(credentialsProvider.resolveCredentials().accessKeyId()).isEqualTo(TEST_ACCESS_KEY);
     assertThat(credentialsProvider.resolveCredentials().secretAccessKey())
         .isEqualTo(TEST_SECRET_KEY);
+  }
+
+  @Test
+  public void testParsesWebIdentityTokenFile() {
+    StorageConfiguration config =
+        new SmallRyeConfigBuilder()
+            .withMapping(StorageConfiguration.class)
+            .addDiscoveredConverters()
+            .withSources(
+                new PropertiesConfigSource(
+                    Map.of("polaris.storage.aws.web-identity-token-file", "/var/run/secrets/token"),
+                    "test"))
+            .build()
+            .getConfigMapping(StorageConfiguration.class);
+
+    assertThat(config.aws().webIdentityTokenFile()).contains(Path.of("/var/run/secrets/token"));
   }
 }

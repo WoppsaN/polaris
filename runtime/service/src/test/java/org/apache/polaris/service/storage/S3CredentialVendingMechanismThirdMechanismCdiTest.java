@@ -86,7 +86,7 @@ class S3CredentialVendingMechanismThirdMechanismCdiTest {
       PolarisApiEndpoints endpoints, ClientCredentials credentials) throws Exception {
     testMechanism.clear();
     assertThat(mechanisms.availableIds())
-        .containsExactly("STS", RecordingThirdCredentialVendingMechanism.ID);
+        .containsExactly("STS", "STS_WEB_IDENTITY", RecordingThirdCredentialVendingMechanism.ID);
     try (PolarisClient client = PolarisClient.polarisClient(endpoints)) {
       String adminToken = client.obtainToken(credentials);
       ManagementApi managementApi = client.managementApi(adminToken);

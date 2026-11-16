@@ -52,6 +52,13 @@ request adding CHANGELOG notes for breaking (!) changes and possibly other secti
   does not provide is refused at create and update, and whenever a credential is vended for it,
   with "S3 credential vending mechanism `<id>` is not available in this server".
 
+- S3 catalogs can set `credentialVendingMechanism` to `STS_WEB_IDENTITY` to vend credentials
+  through STS AssumeRoleWithWebIdentity, for S3-compatible stores whose STS accepts web identity
+  but not AssumeRole, such as Pure Storage FlashBlade. Polaris sends its own token, read on every
+  credential mint from the file set by the new `polaris.storage.aws.web-identity-token-file`
+  property (for example a Kubernetes projected service account token); the caller's token is never
+  sent. The realm must list `STS_WEB_IDENTITY` in `SUPPORTED_S3_CREDENTIAL_VENDING_MECHANISMS`.
+
 ### Upgrade notes
 
 - BigLake Iceberg REST catalogs using GCP authentication are now validated on creation and update,

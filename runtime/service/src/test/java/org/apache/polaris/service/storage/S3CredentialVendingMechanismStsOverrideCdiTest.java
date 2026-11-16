@@ -74,7 +74,7 @@ class S3CredentialVendingMechanismStsOverrideCdiTest {
   void anEmptyAndAnExplicitStsMechanismBothVendThroughTheEnabledAlternative(
       PolarisApiEndpoints endpoints, ClientCredentials credentials) throws Exception {
     override.clear();
-    assertThat(mechanisms.availableIds()).containsExactly("STS");
+    assertThat(mechanisms.availableIds()).containsExactly("STS", "STS_WEB_IDENTITY");
     assertThat(mechanisms.require("STS"))
         .isInstanceOf(RecordingStsCredentialVendingMechanism.class);
 

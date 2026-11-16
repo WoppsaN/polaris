@@ -160,7 +160,7 @@ class S3CredentialVendingMechanismCdiTest {
     // The application started at all, with two mechanisms allowlisted and neither installed, and
     // default readiness settings, is itself part of what this proves; availableIds() shows only
     // STS installed.
-    assertThat(mechanisms.availableIds()).containsExactly("STS");
+    assertThat(mechanisms.availableIds()).containsExactly("STS", "STS_WEB_IDENTITY");
 
     Map<String, S3CredentialVendingMechanism> live =
         new ConcurrentHashMap<>(

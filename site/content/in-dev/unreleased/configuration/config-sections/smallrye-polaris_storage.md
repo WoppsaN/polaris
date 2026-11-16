@@ -31,6 +31,7 @@ Applies to the STS client pool and to Iceberg S3 clients created for table opera
 |----------|---------------|------|-------------|
 | `polaris.storage.aws.access-key` |  | `string` | The AWS access key to use for authentication. If not present, the default credentials  provider chain will be used.  |
 | `polaris.storage.aws.secret-key` |  | `string` | The AWS secret key to use for authentication. If not present, the default credentials  provider chain will be used.  |
+| `polaris.storage.aws.web-identity-token-file` |  | `path` | The file holding the Polaris server's own web identity token, which the `STS_WEB_IDENTITY` credential vending mechanism sends to STS AssumeRoleWithWebIdentity.  The  file is read on every credential mint, so a rotated token is picked up.  |
 | `polaris.storage.aws.`_`<storage>`_`.access-key` |  | `string` | The AWS access key to use for authentication when using named storages.  |
 | `polaris.storage.aws.`_`<storage>`_`.secret-key` |  | `string` | The AWS secret key to use for authentication when using named storages.  |
 | `polaris.storage.gcp.token` |  | `string` | The GCP access token to use for authentication. If not present, the default credentials  provider chain will be used.  |

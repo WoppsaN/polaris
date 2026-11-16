@@ -41,6 +41,9 @@ public interface S3CredentialVendingMechanism {
   /** STS AssumeRole against the catalog's role. A catalog that leaves the field empty uses it. */
   String STS = "STS";
 
+  /** STS AssumeRoleWithWebIdentity against the catalog's role, with the server's own token. */
+  String STS_WEB_IDENTITY = "STS_WEB_IDENTITY";
+
   /** The storage integration that vends for one S3 catalog under this mechanism. */
   PolarisStorageIntegration integrationFor(AwsStorageConfigurationInfo storageConfig);
 

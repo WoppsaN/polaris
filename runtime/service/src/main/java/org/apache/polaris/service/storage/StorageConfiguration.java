@@ -24,6 +24,7 @@ import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithName;
 import io.smallrye.config.WithParentName;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -78,6 +79,14 @@ public interface StorageConfiguration extends S3AccessConfig {
      */
     @WithName("secret-key")
     Optional<String> secretKey();
+
+    /**
+     * The file holding the Polaris server's own web identity token, which the {@code
+     * STS_WEB_IDENTITY} credential vending mechanism sends to STS AssumeRoleWithWebIdentity. The
+     * file is read on every credential mint, so a rotated token is picked up.
+     */
+    @WithName("web-identity-token-file")
+    Optional<Path> webIdentityTokenFile();
 
     @WithParentName
     @ConfigDocs.ConfigPropertyName("storage")

@@ -1242,6 +1242,7 @@ components:
               type: string
               examples:
                 - "STS"
+                - "STS_WEB_IDENTITY"
               description: |
                 How Polaris vends subscoped storage credentials for this catalog. Leave the field empty
                 to use the server's default mechanism, which is STS in Apache Polaris.
@@ -1250,6 +1251,8 @@ components:
                 - `STS`: STS AssumeRole against the configured role.
                 - `R2_LOCAL_SIGNING`: temporary Cloudflare R2 credentials that the server signs
                   locally, scoped to the table's location.
+                - `STS_WEB_IDENTITY`: STS AssumeRoleWithWebIdentity against the configured role, with
+                  the server's own web identity token.
 
                 Later releases may add values. The server returns HTTP 400 for a value it does not
                 support.
